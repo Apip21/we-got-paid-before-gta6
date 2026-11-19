@@ -5,6 +5,11 @@
 // file sitting in the bot directory and places an identical copy into the
 // output directory, where the grading harness expects to find it.
 //
+// Before copying, the program reads POST.json and checks that it really
+// names an X post. A malformed file is refused with a message on stderr
+// and exit status 1 instead of being handed to the grader, so a broken
+// entry fails loudly here rather than silently downstream.
+//
 // Environment overrides (used for local runs outside the grader):
 //   MAKEFUN_BOT_DIR     where POST.json is read from   (default: /bot)
 //   MAKEFUN_OUTPUT_DIR  where the copy is written to   (default: /output)
@@ -15,7 +20,7 @@
 // The program is deterministic: given the same POST.json it always writes
 // the same bytes, and it touches nothing outside the two directories above.
 
-import { copyFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const sourceDir = process.env.MAKEFUN_BOT_DIR ?? "/bot";
@@ -24,6 +29,40 @@ const targetDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
 const sourceFile = join(sourceDir, "POST.json");
 const targetFile = join(targetDir, "POST.json");
 
+// An X post address looks like https://x.com/<handle>/status/<id>, with
+// the id made of digits only; the twitter.com host names the same posts.
+const postAddressPattern = /^https:\/\/(?:x\.com|twitter\.com)\/[^/\s]+\/status\/\d+$/;
+
+function fail(message) {
+  console.error(`POST.json refused: ${message}`);
+  process.exit(1);
+}
+
+// Read and validate POST.json before anything is copied.
+let rawPost;
+try {
+  rawPost = readFileSync(sourceFile, "utf8");
+} catch (failure) {
+  const reason = failure instanceof Error ? failure.message : String(failure);
+  fail(`could not read ${sourceFile}: ${reason}`);
+}
+
+let parsedPost;
+try {
+  parsedPost = JSON.parse(rawPost);
+} catch {
+  fail(`${sourceFile} is not valid JSON`);
+}
+
+if (typeof parsedPost !== "object" || parsedPost === null || Array.isArray(parsedPost)) {
+  fail(`${sourceFile} must be a JSON object like {"url": "https://x.com/<handle>/status/<id>"}`);
+}
+
+if (typeof parsedPost.url !== "string" || !postAddressPattern.test(parsedPost.url)) {
+  fail(`"url" must be an X post address (https://x.com/<handle>/status/<id>), got: ${JSON.stringify(parsedPost.url)}`);
+}
+
+// The file checked out: deliver an identical copy to the output directory.
 mkdirSync(targetDir, { recursive: true });
 
 try {
